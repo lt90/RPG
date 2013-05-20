@@ -1,0 +1,247 @@
+/*
+ * Copyright 2010-2013 OpenXcom Developers.
+ *
+ * This file is part of OpenXcom.
+ *
+ * OpenXcom is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * OpenXcom is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with OpenXcom.  If not, see <http://www.gnu.org/licenses/>.
+ */
+#include "Country.h"
+#include "../Ruleset/RuleCountry.h"
+#include "../Engine/RNG.h"
+
+namespace OpenXcom
+{
+
+/**
+ * Initializes a country of the specified type.
+ * @param rules Pointer to ruleset.
+ * @param gen Generate new funding.
+ */
+Country::Country(RuleCountry *rules, bool gen) : _rules(rules), _pact(false), _newPact(false), _funding(0), _satisfaction(2)
+{
+	if (gen)
+	{
+		_funding.push_back(_rules->generateFunding());
+	}
+	_activityAlien.push_back(0);
+	_activityXcom.push_back(0);
+}
+
+/**
+ *
+ */
+Country::~Country()
+{
+}
+
+/**
+ * Loads the country from a YAML file.
+ * @param node YAML node.
+ */
+void Country::load(const YAML::Node &node)
+{
+	node["funding"] >> _funding;
+	node["activityXcom"] >> _activityXcom;
+	node["activityAlien"] >> _activityAlien;
+	node["pact"] >> _pact;
+	node["newPact"] >> _newPact;
+}
+
+/**
+ * Saves the country to a YAML file.
+ * @param out YAML emitter.
+ */
+void Country::save(YAML::Emitter &out) const
+{
+	out << YAML::BeginMap;
+	out << YAML::Key << "type" << YAML::Value << _rules->getType();
+	out << YAML::Key << "funding" << YAML::Value << _funding;
+	out << YAML::Key << "activityXcom" << YAML::Value << _activityXcom;
+	out << YAML::Key << "activityAlien" << YAML::Value << _activityAlien;
+	out << YAML::Key << "pact" << YAML::Value << _pact;
+	out << YAML::Key << "newPact" << YAML::Value << _newPact;
+	out << YAML::EndMap;
+}
+
+/**
+ * Returns the ruleset for the country's type.
+ * @return Pointer to ruleset.
+ */
+RuleCountry *Country::getRules() const
+{
+	return _rules;
+}
+
+/**
+ * Returns the country's current monthly funding.
+ * @return Monthly funding.
+ */
+const std::vector<int> &Country::getFunding() const
+{
+	return _funding;
+}
+
+/**
+ * Changes the country's current monthly funding.
+ * @param funding Monthly funding.
+ */
+void Country::setFunding(int funding)
+{
+	_funding.back() = funding;
+}
+
+/*
+ * Keith Richards would be so proud
+ * @return satisfaction level, 0 = alien pact, 1 = unhappy, 2 = satisfied, 3 = happy.
+ */
+int Country::getSatisfaction()
+{
+	if(_pact)
+		return 0;
+	return _satisfaction;
+}
+
+/**
+ * Adds to the country's xcom activity level.
+ * @param activity how many points to add.
+ */
+void Country::addActivityXcom(int activity)
+{
+	_activityXcom.back() += activity;
+}
+
+/**
+ * Adds to the country's alien activity level.
+ * @param activity how many points to add.
+ */
+void Country::addActivityAlien(int activity)
+{
+	_activityAlien.back() += activity;
+}
+
+/**
+ * Gets the country's xcom activity level.
+ * @return activity level.
+ */
+const std::vector<int> &Country::getActivityXcom() const
+{
+	return _activityXcom;
+}
+
+/**
+ * Gets the country's alien activity level.
+ * @return activity level.
+ */
+const std::vector<int> &Country::getActivityAlien() const
+{
+	return _activityAlien;
+}
+
+/**
+ * reset all the counters,
+ * calculate this month's funding,
+ * set the change value for the month.
+ * @param xcomTotal the council's xcom score
+ * @param alienTotal the council's alien score
+ */
+
+void Country::newMonth(int xcomTotal, int alienTotal)
+{
+	_satisfaction = 2;
+	int funding = getFunding().back();
+	int good = (xcomTotal / 10) + _activityXcom.back();
+	int bad = (alienTotal / 20) + _activityAlien.back();
+	int newFunding = (_funding.back()/100) * RNG::generate(5, 20);
+
+	if (bad <= good + 30)
+	{
+		if (good > bad + 30)
+		{
+			if (RNG::generate(0, good) > bad)
+			{
+				// don't go over the cap
+				int cap = getRules()->getFundingCap()*1000;
+				if (funding + newFunding > cap)
+					newFunding = cap - funding;
+				if (newFunding)
+					_satisfaction = 3;
+			}
+		}
+	}
+	else
+	{
+		if (RNG::generate(0, bad) > good)
+		{
+			if (newFunding)
+			{
+				newFunding = -newFunding;
+				_satisfaction = 1;
+			}
+		}
+	}
+
+	// about to be in cahoots
+	if(_newPact && !_pact)
+	{
+		_newPact = false;
+		_pact = true;
+		addActivityAlien(150);
+	}
+
+
+
+	// set the new funding and reset the activity meters
+	if(_pact)
+		_funding.push_back(0);
+	else if (_satisfaction != 2)
+		_funding.push_back(funding + newFunding);
+	else
+		_funding.push_back(funding);
+	
+	_activityAlien.push_back(0);
+	_activityXcom.push_back(0);
+	if(_activityAlien.size() > 12)
+		_activityAlien.erase(_activityAlien.begin());
+	if(_activityXcom.size() > 12)
+		_activityXcom.erase(_activityXcom.begin());
+	if(_funding.size() > 12)
+		_funding.erase(_funding.begin());
+}
+
+/**
+ * @return if we will sign a new pact.
+ */
+bool Country::getNewPact()
+{
+	return _newPact;
+}
+
+/**
+ * sign a new pact at month's end.
+ */
+void Country::setNewPact()
+{
+	 _newPact = true;
+}
+
+/**
+ * no setter for this one, as it gets set automatically
+ * at month's end if _newPact is set.
+ * @return if we have signed a pact.
+ */
+bool Country::getPact()
+{
+	return _pact;
+}
+}
